@@ -20,9 +20,9 @@ class GMM:
         tss = train_set.shape[0]
         prob = np.dot(self.w, norm)  # prob[j] probability of observation j
 
-        for i in range(self.compnum):
-             for j in range(tss):
-                 gamma[i][j] = self.w[i] * norm[i][j] / prob[j]
+        np.copyto(gamma, norm)
+        gamma *= self.w[:, np.newaxis]
+        gamma /= prob
 
     def Mstep(self, train_set, gamma):
         tss = train_set.shape[0]
@@ -30,18 +30,16 @@ class GMM:
         self.w = exnum / tss
         for i in range(self.compnum):
             self.gaussians[i].mu = np.dot(gamma[i], train_set) / exnum[i]
-            centre = train_set - np.full((tss, self.dim), self.gaussians[i].mu)
+            centre = train_set - self.gaussians[i].mu
 
-            self.gaussians[i].cov = np.zeros((self.dim, self.dim))
+            self.gaussians[i].cov.fill(0)
             for n in range(tss):
                 self.gaussians[i].cov += gamma[i][n] * np.asmatrix(centre[n]).T * centre[n]
             self.gaussians[i].cov /= exnum[i]
 
     def updateProbabilities(self, norm, train_set):
-        tss = train_set.shape[0]
         for i in range(self.compnum):
-            for j in range(tss):
-                norm[i][j] = self.gaussians[i].density(train_set[j])
+            norm[i] = self.gaussians[i].density(train_set)
 
     def logLikelihood(self, train_set, norm):
         tss = train_set.shape[0]
@@ -118,8 +116,8 @@ def main():
     true_w = [0.3, 0.5, 0.2]
 
     true_mu = [ [0, 0],
-                [5, 5],
-                [10, 10] ]
+                [3, 3],
+                [7.5, 7.5] ]
 
     true_cov =[[ [3, -3],
                  [-3, 5] ],
@@ -130,7 +128,7 @@ def main():
                [ [2, 1],
                  [1, 2] ]]
 
-    obs = generate(true_w, true_mu, true_cov, 1000)
+    obs = generate(true_w, true_mu, true_cov, 5000)
     #obs = readSamples()
 
     plt.plot(*zip(*obs), marker='o', ls='')
