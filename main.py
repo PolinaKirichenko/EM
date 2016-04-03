@@ -18,7 +18,7 @@ class Gauss:
 class GMM:
     def Estep(self, train_set, norm, gamma):
         tss = train_set.shape[0]
-        prob = np.dot(self.w, norm)  # prob[j] probability of observation j
+        prob = np.dot(self.w, norm) # prob[j] probability of observation j
 
         np.copyto(gamma, norm)
         gamma *= self.w[:, np.newaxis]
@@ -26,7 +26,7 @@ class GMM:
 
     def Mstep(self, train_set, gamma):
         tss = train_set.shape[0]
-        exnum = np.array([sum(gamma[i]) for i in range(self.compnum)])
+        exnum = gamma.sum(axis=1)
         self.w = exnum / tss
         for i in range(self.compnum):
             self.gaussians[i].mu = np.dot(gamma[i], train_set) / exnum[i]
@@ -83,8 +83,8 @@ def initParam(gnum, obs):
     w = np.random.random(gnum)
     w /= w.sum()
 
-    mu = np.random.random_sample((gnum, dim)) * (np.amax(obs, axis=0) - np.amin(obs, axis=0)) + \
-         np.full((gnum, dim), np.amin(obs, axis=0))
+    mu = np.random.multivariate_normal(obs.mean(axis=0), np.diag(obs.std(axis=0)), gnum)
+    #mu = np.random.random_sample((gnum, dim)) * (np.amax(obs, axis=0) - np.amin(obs, axis=0)) + np.amin(obs, axis=0)
     
     cov = np.full((gnum, dim, dim), np.eye(dim, dtype = float))
     return w, mu, cov
@@ -113,7 +113,7 @@ def readSamples():
 
 def main():
     gnum = 3
-    true_w = [0.3, 0.5, 0.2]
+    true_w = [0.35, 0.33, 0.32]
 
     true_mu = [ [0, 0],
                 [3, 3],
@@ -128,10 +128,10 @@ def main():
                [ [2, 1],
                  [1, 2] ]]
 
-    obs = generate(true_w, true_mu, true_cov, 5000)
-    #obs = readSamples()
+    #obs = generate(true_w, true_mu, true_cov, 5000)
+    obs = readSamples()
 
-    plt.plot(*zip(*obs), marker='o', ls='')
+    plt.plot(*zip(*obs), marker='o', ls='', zorder=1)
         
     w, mu, cov = initParam(gnum, obs)
 
@@ -149,8 +149,8 @@ def main():
     Z = 0
     for i, g in enumerate(model.gaussians):
         Z = model.w[i] * mlab.bivariate_normal(X, Y, sigmax=g.cov[0][0], sigmay=g.cov[1][1], mux=g.mu[0], muy=g.mu[1], sigmaxy=g.cov[0][1])
-        plt.contour(X, Y, Z)
+        plt.contour(X, Y, Z, zorder=2)
             
-    plt.savefig('gaus.png')
+    plt.savefig('em.png')
 
 main()
