@@ -1,20 +1,12 @@
 import numpy as np
+import bisect
 from math import *
 from scipy.stats import multivariate_normal, rv_discrete
 import matplotlib.pyplot as plt
 import matplotlib.mlab as mlab
 import time
 from matplotlib.ticker import MultipleLocator, FormatStrFormatter
-
-class Gauss:
-    def __init__(self, m, c):
-        self.dim = m.size
-        self.mu = m
-        self.cov = c
-
-    def density(self, x):
-        return multivariate_normal.pdf(x, self.mu, self.cov)
-
+from gaussian import Gauss
 
 class GMM:
     def Estep(self, train_set, norm, gamma):
@@ -23,16 +15,12 @@ class GMM:
         gamma *= self.w[:, np.newaxis]
         gamma /= prob
 
-    def Mstep(self, minibatch, gamma, inv, tss, lr, pr, f):
+    def Mstep(self, minibatch, gamma, inv, tss, lr):
         bs = minibatch.shape[0]
         self.w += lr * gamma.sum(axis=1) / self.w
         self.w /= self.w.sum()
-        if pr:
-            f.write("LR " + str(lr) + '\n')
         for i in range(self.compnum):
             inv = np.array(np.asmatrix(self.gaussian[i].cov).I)
-            if pr:
-                f.write(str(np.dot(inv, np.dot(gamma[i], minibatch - self.gaussian[i].mu))) + '\n')
             self.gaussian[i].mu += lr * np.dot(inv, np.dot(gamma[i], minibatch - self.gaussian[i].mu))
             centre = minibatch - self.gaussian[i].mu
 
@@ -65,7 +53,6 @@ class GMM:
             print(g.cov, '\n')
 
     def stochEM(self, train_set, s):
-        f = open("stat", 'w')
         tss = train_set.shape[0]
         gamma = np.zeros((self.compnum, s)) # for mini-batch
         complete_gamma = np.zeros((self.compnum, tss))
@@ -79,32 +66,26 @@ class GMM:
         ll = self.logLikelihood(train_set, complete_norm)
         print(ll)
         draw(train_set, self, "")
-        freq = 10
+        freq = 100
 
         for i in range(1000):
             batch_idx = np.random.randint(train_set.shape[0], size=s)
             minibatch = train_set[batch_idx, :]
-            if i % freq == 0:
-                f.write("\nMINIBATCH " + str(i) + '\n' + str(minibatch) + '\n')
 
             self.updateProbabilities(norm, minibatch)
             self.Estep(minibatch, norm, gamma)
-            self.Mstep(minibatch, gamma, inv, tss, 1 / (i + 1), i % freq == 0, f)
+            self.Mstep(minibatch, gamma, inv, tss, max(1 / (i + 1), 0.000001))
             
             self.updateProbabilities(complete_norm, train_set)
-            diff = self.logLikelihood(train_set, complete_norm) - ll
-            ll += diff
-            if i % freq == 0:
-                f.write("LOGLIKE " + str(ll) + '\n')
-                draw(train_set, self, i)
+            ll = self.logLikelihood(train_set, complete_norm)
             print(ll)
-        f.close()
+            if i % freq == 0:
+                draw(train_set, self, i)
 
 
 def closest(obs, point):
-    # delete aleady used dots
     idx = (np.linalg.norm(obs - point, axis=1)).argmin()
-    return obs[idx]
+    return idx, obs[idx]
 
 
 def initParam(gnum, obs):
@@ -113,36 +94,26 @@ def initParam(gnum, obs):
 
     #mu = np.random.random_sample((gnum, dim)) * (np.amax(obs, axis=0) - np.amin(obs, axis=0)) + np.amin(obs, axis=0)
     mu = np.random.multivariate_normal(obs.mean(axis=0), np.diag(obs.std(axis=0) ** 2), gnum)
+    full = list(range(obs.shape[0]))
+    idxs = []
     for i in range(gnum):
-        mu[i] = closest(obs, mu[i])
-
+        idx, mu[i] = closest(obs[list(set(full) - set(idxs)), :], mu[i])
+        for i in idxs:
+            if i <= idx:
+                idx += 1
+            else:
+                break
+        bisect.insort(idxs, idx)
 
     cov = np.full((gnum, dim, dim), np.eye(dim, dtype = float))
     return w, mu, cov
 
-def generateSamples(w, mu, cov, s):
-    dim = len(mu[0])
-    d = rv_discrete(values = (range(len(w)), w))
-    components = d.rvs(size=s)
-    # generate samples of size of each component, then shuffle
-    if dim > 1:
-        return components, np.array([np.random.multivariate_normal(mu[i], cov[i], 1)[0] for i in components])
-    else:
-        return components, np.asmatrix([np.random.normal(mu[i], cov[i], 1)[0] for i in components]).T
-
-def generate(true_w, true_mu, true_cov, n):
-    comps, obs = generateSamples(true_w, true_mu, true_cov, n)
-    np.savetxt("true", np.concatenate((np.asmatrix(comps).T, obs), axis=1), fmt=['%d'] + ['%f'] * obs.shape[1], delimiter='\t')
-    np.savetxt("input", obs, delimiter='\t', fmt='%f')
-    return obs
-
-def readSamples():
-    with open("input") as f:
+def readSamples(file):
+    with open(file) as f:
         obs = np.loadtxt(f)
     return obs
 
 def draw(obs, model, j):
-# Here I assume that dimension is 2 #
     minorLocator = MultipleLocator(1)
 
     plt.figure()
@@ -168,24 +139,8 @@ def draw(obs, model, j):
 
 
 def main():
-    gnum = 3
-    true_w = [0.4, 0.3, 0.3]
-
-    true_mu = [ [-5, 5],
-                [6, 6],
-                [0, -4], ]
-
-    true_cov =[[ [2, 1],
-                 [1, 2]],
-
-               [ [3, -3],
-                 [-3, 5] ],
-
-               [ [1, 0],
-                 [0, 1] ]]
-
-    #obs = generate(true_w, true_mu, true_cov, 5000)
-    obs = readSamples()
+    gnum = 4
+    obs = readSamples("data/input5")
 
     w, mu, cov = initParam(gnum, obs)
 
