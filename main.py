@@ -67,15 +67,13 @@ class GMM:
         gamma = np.zeros((self.compnum, tss))
         norm = np.zeros((self.compnum, tss))
         self.updateProbabilities(norm, train_set)
+        print(self.logLikelihood(train_set, norm))
 
         for i in range(iter):
-            begin = time.clock()
             self.Estep(train_set, norm, gamma)
             self.Mstep(train_set, gamma)
             self.updateProbabilities(norm, train_set)
             print(self.logLikelihood(train_set, norm))
-            end = time.clock()
-            print(end - begin, '\n')
 
 
 def initParam(gnum, obs):
@@ -105,52 +103,42 @@ def generate(true_w, true_mu, true_cov, n):
     np.savetxt("input", obs, delimiter='\t', fmt='%f')
     return obs
 
-def readSamples():
-    with open("input") as f:
+def readSamples(file):
+    with open(file) as f:
         obs = np.loadtxt(f)
     return obs
 
 
 def main():
     gnum = 3
-    true_w = [0.35, 0.33, 0.32]
+    dim = 10
+    obs = readSamples("data/input8")
 
-    true_mu = [ [0, 0],
-                [3, 3],
-                [7.5, 7.5] ]
-
-    true_cov =[[ [3, -3],
-                 [-3, 5] ],
-
-               [ [1, 0],
-                 [0, 1] ],
-
-               [ [2, 1],
-                 [1, 2] ]]
-
-    #obs = generate(true_w, true_mu, true_cov, 5000)
-    obs = readSamples()
-
-    plt.plot(*zip(*obs), marker='o', ls='', zorder=1)
+    #plt.plot(*zip(*obs), marker='o', ls='', zorder=1)
         
     w, mu, cov = initParam(gnum, obs)
+    # w = np.array([0.33, 0.32, 0.35])
+    # mu = np.zeros((gnum, dim))
+    # mu[1] = np.full((1, dim), 5, dtype=float)
+    # mu[2] = np.full((1, dim), 10, dtype=float)
+    # cov = np.full((gnum, dim, dim), np.eye(dim))
 
     model = GMM(w, mu, cov)
-    model.EM(obs, 15)
+    model.EM(obs, 10)
     model.printParam()
 
     # Here I assume that dimension is 2 #
-    delta = 0.2
-    obsmax = np.amax(obs, axis=0)
-    obsmin = np.amin(obs, axis=0)
-    x = np.arange(obsmin[0], obsmax[0], delta)
-    y = np.arange(obsmin[1], obsmax[1], delta)
-    X, Y = np.meshgrid(x, y)
-    Z = 0
-    for i, g in enumerate(model.gaussians):
-        Z = model.w[i] * mlab.bivariate_normal(X, Y, sigmax=g.cov[0][0], sigmay=g.cov[1][1], mux=g.mu[0], muy=g.mu[1], sigmaxy=g.cov[0][1])
-        plt.contour(X, Y, Z, zorder=2)
+    # delta = 0.2
+    # obsmax = np.amax(obs, axis=0)
+    # obsmin = np.amin(obs, axis=0)
+    # x = np.arange(obsmin[0], obsmax[0], delta)
+    # y = np.arange(obsmin[1], obsmax[1], delta)
+    # X, Y = np.meshgrid(x, y)
+    # Z = 0
+    # for i, g in enumerate(model.gaussians):
+    #     Z = model.w[i] * mlab.bivariate_normal(X, Y, sigmax=g.cov[0][0], sigmay=g.cov[1][1], mux=g.mu[0], muy=g.mu[1], sigmaxy=g.cov[0][1])
+    #     plt.contour(X, Y, Z, zorder=2)
             
-    plt.savefig('em.png')
+    # plt.savefig('em.png')
 
 main()

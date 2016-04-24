@@ -19,15 +19,16 @@ def generate(w, mu, cov, n, idx):
     return obs
 
 def main():
-    idx = 101
+    idx = 7
     gnum = 3
+    dim = 10
     w = [0.33, 0.32, 0.35]
 
-    mu = np.zeros((gnum, 100))
-    mu[1] = np.full((1, 100), 5, dtype=float)
-    mu[2] = np.full((1, 100), 10, dtype=float)
+    mu = np.zeros((gnum, dim))
+    mu[1] = np.full((1, dim), 5, dtype=float)
+    mu[2] = np.full((1, dim), 10, dtype=float)
 
-    cov = np.full((gnum, 100, 100), np.eye(100))
+    cov = np.full((gnum, dim, dim), np.eye(dim))
 
     obs = generate(w, mu, cov, 5000, idx)
     #plt.plot(*zip(*obs), marker='o', ls='', zorder=1)

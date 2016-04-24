@@ -1,3 +1,4 @@
+import sys
 import numpy as np
 import bisect
 from math import *
@@ -7,6 +8,7 @@ import matplotlib.mlab as mlab
 import time
 from matplotlib.ticker import MultipleLocator, FormatStrFormatter
 from gaussian import Gauss
+from true import real_params
 
 class GMM:
     def Estep(self, train_set, norm, gamma):
@@ -15,12 +17,12 @@ class GMM:
         gamma *= self.w[:, np.newaxis]
         gamma /= prob
 
-    def Mstep(self, minibatch, gamma, inv, tss, lr):
+    def Mstep(self, minibatch, gamma, inv, tss, lr, var):
         bs = minibatch.shape[0]
         self.w += lr * gamma.sum(axis=1) / self.w
         self.w /= self.w.sum()
         for i in range(self.compnum):
-            inv = np.array(np.asmatrix(self.gaussian[i].cov).I)
+            inv = np.array(np.linalg.inv(self.gaussian[i].cov))
             self.gaussian[i].mu += lr * np.dot(inv, np.dot(gamma[i], minibatch - self.gaussian[i].mu))
             centre = minibatch - self.gaussian[i].mu
 
@@ -35,6 +37,7 @@ class GMM:
         tss = train_set.shape[0]
         ll = 0
         prob = np.dot(self.w, norm)
+        np.savetxt('stat', prob)
         for i in range(tss):
             ll += log(prob[i])
         return ll
@@ -52,8 +55,9 @@ class GMM:
             print(g.mu)
             print(g.cov, '\n')
 
-    def stochEM(self, train_set, s):
+    def stochEM(self, train_set, s, const):
         tss = train_set.shape[0]
+        var = train_set.std(axis = 0) ** 2
         gamma = np.zeros((self.compnum, s)) # for mini-batch
         complete_gamma = np.zeros((self.compnum, tss))
 
@@ -64,29 +68,45 @@ class GMM:
         inv = np.zeros((self.dim, self.dim))
 
         ll = self.logLikelihood(train_set, complete_norm)
-        print(ll)
-        draw(train_set, self, "")
-        freq = 100
+        # freq = 100
 
-        for i in range(1000):
+        for i in range(50):
             batch_idx = np.random.randint(train_set.shape[0], size=s)
             minibatch = train_set[batch_idx, :]
 
             self.updateProbabilities(norm, minibatch)
             self.Estep(minibatch, norm, gamma)
-            self.Mstep(minibatch, gamma, inv, tss, max(1 / (i + 1), 0.000001))
+            self.Mstep(minibatch, gamma, inv, tss, const, var)
             
             self.updateProbabilities(complete_norm, train_set)
             ll = self.logLikelihood(train_set, complete_norm)
             print(ll)
-            if i % freq == 0:
-                draw(train_set, self, i)
+            #if i % freq == 0:
+            #    draw(train_set, self, "a" + str(i))
+
+        #print("DECREASE LR")
+        #draw(train_set, self, "b")
+
+        for i in range(200):
+            batch_idx = np.random.randint(train_set.shape[0], size=s)
+            minibatch = train_set[batch_idx, :]
+
+            self.updateProbabilities(norm, minibatch)
+            self.Estep(minibatch, norm, gamma)
+            self.Mstep(minibatch, gamma, inv, tss, const / (i + 1), var)
+            
+            self.updateProbabilities(complete_norm, train_set)
+
+            ll = self.logLikelihood(train_set, complete_norm)
+            print(ll)
+            #if i % freq == 0:
+            #    draw(train_set, self, "c" + str(i))
+        return ll
 
 
 def closest(obs, point):
     idx = (np.linalg.norm(obs - point, axis=1)).argmin()
     return idx, obs[idx]
-
 
 def initParam(gnum, obs):
     dim = obs.shape[1]
@@ -108,27 +128,20 @@ def initParam(gnum, obs):
     cov = np.full((gnum, dim, dim), np.eye(dim, dtype = float))
     return w, mu, cov
 
-def readSamples(file):
-    with open(file) as f:
-        obs = np.loadtxt(f)
-    return obs
-
 def draw(obs, model, j):
     minorLocator = MultipleLocator(1)
-
     plt.figure()
     fig, ax = plt.subplots()
     plt.plot(*zip(*obs), marker='o', ls='', zorder=1)
-    delta = 0.2
+    delta = 0.1
     obsmax = np.amax(obs, axis=0)
     obsmin = np.amin(obs, axis=0)
-    x = np.arange(obsmin[0], obsmax[0], delta)
-    y = np.arange(obsmin[1], obsmax[1], delta)
-    X, Y = np.meshgrid(x, y)
-    Z = 0
+    X, Y = np.mgrid[obsmin[0]:obsmax[0]:delta, obsmin[1]:obsmax[1]:delta] 
+    pos = np.empty(X.shape + (2,))
+    pos[:, :, 0] = X; pos[:, :, 1] = Y
     for i, g in enumerate(model.gaussian):
-        Z = model.w[i] * mlab.bivariate_normal(X, Y, sigmax=g.cov[0][0], sigmay=g.cov[1][1], mux=g.mu[0], muy=g.mu[1], sigmaxy=g.cov[0][1])
-        plt.contour(X, Y, Z, zorder=2)
+        rv = multivariate_normal(g.mu, g.cov)
+        plt.contour(X, Y, model.w[i] * rv.pdf(pos), zorder=2)
         plt.scatter(g.mu[0], g.mu[1], color='r', s=20, zorder=2)
     
     ax.xaxis.set_minor_locator(minorLocator)
@@ -138,9 +151,66 @@ def draw(obs, model, j):
     plt.close()
 
 
-def main():
+def find_lr(obs, gnum):
+    w, mu, cov = initParam(gnum, obs)
+    model = GMM(w, mu, cov)
+    mean_ll = []
+    for const in np.arange(0.01, 0.11, 0.01):
+        values = []
+        for i in range(20):
+            print(i)
+            w, mu, cov = initParam(gnum, obs)
+            model.w = w; model.mu = mu; model.cov = cov
+            logll = model.stochEM(obs, gnum, const)
+            values.append(logll)
+        mean_ll.append(sum(values) / len(values))
+        print(const)
+    return (np.argmax(np.array(mean_ll)) + 1) * 0.01
+
+
+def test_accuracy(const, fnum, out, gnum):
+    obs = np.loadtxt("data/" + "input" + str(fnum))
+    real_gauss = real_params(fnum)
+
+    means = []
+    covs = []
+    w, mu, cov = initParam(gnum, obs)
+    model = GMM(w, mu, cov)
+    for i in range(20):
+        print(i)
+        model.w = w; 
+        for i, g in enumerate(model.gaussian):
+            g.mu = mu[i]; g.cov = cov[i]
+        model.stochEM(obs, gnum, const)
+        all_mu = np.array([g.mu for g in model.gaussian])
+        all_cov = np.array([g.cov for g in model.gaussian])
+        for i in range(gnum):
+            idx = (np.linalg.norm(all_mu - real_gauss.mu[i], axis=1)).argmin()
+            means.append(np.linalg.norm(all_mu[idx] - real_gauss.mu[i]))
+            covs.append(np.linalg.norm(np.diagonal(all_cov[idx]) - np.diagonal(real_gauss.cov[i])))
+
+    out.write("Testing set " + str(fnum) + '\n')
+    out.write("mu " + str(sum(means) / len(means)) + '\n' + "cov " + str(sum(covs) / len(covs)) + '\n\n')
+
+
+def cross_valid():
+    comp = {1 : 2, 2 : 2, 3 : 3, 4 : 3, 5 : 4, 6: 3, 7: 3}
+    setnum = int(sys.argv[1])
+
+    obs = np.loadtxt("data/input" + str(setnum))
+
+    lr_const = find_lr(obs, comp[setnum])
+    f = open("outcome" + str(setnum), 'w+')
+    f.write("LR found for dataset " + str(setnum) + " is " + str(lr_const) + '\n\n')
+    for i in range(1, 6):
+        if i == setnum:
+            continue
+        test_accuracy(lr_const, i, f, comp[i])
+    f.close()
+
+def em_train():
     gnum = 4
-    obs = readSamples("data/input5")
+    obs = np.loadtxt("data/input6")
 
     w, mu, cov = initParam(gnum, obs)
 
@@ -153,4 +223,4 @@ def main():
 
     draw(obs, model, "fin")
 
-main()
+cross_valid()
