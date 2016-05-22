@@ -2,9 +2,10 @@ import numpy as np
 from scipy.stats import multivariate_normal, rv_discrete
 import matplotlib.pyplot as plt
 import matplotlib.mlab as mlab
+from true import real_params
 
 def generateSamples(w, mu, cov, s):
-    dim = mu.shape[1]
+    dim = len(mu[0])
     d = rv_discrete(values = (range(len(w)), w))
     components = d.rvs(size=s)
     # generate samples of size of each component, then shuffle
@@ -19,18 +20,10 @@ def generate(w, mu, cov, n, idx):
     return obs
 
 def main():
-    idx = 7
-    gnum = 3
-    dim = 10
-    w = [0.33, 0.32, 0.35]
-
-    mu = np.zeros((gnum, dim))
-    mu[1] = np.full((1, dim), 5, dtype=float)
-    mu[2] = np.full((1, dim), 10, dtype=float)
-
-    cov = np.full((gnum, dim, dim), np.eye(dim))
-
-    obs = generate(w, mu, cov, 5000, idx)
+    idx = 15
+    real_gauss = real_params(idx)
+    w =  [1 / len(real_gauss.mu)] * len(real_gauss.mu)
+    obs = generate(w, real_gauss.mu, real_gauss.cov, 50000, idx)
     #plt.plot(*zip(*obs), marker='o', ls='', zorder=1)
     #plt.savefig('sets/set' + str(idx) + '.png')
 

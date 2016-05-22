@@ -4,15 +4,14 @@ from scipy.stats import multivariate_normal, rv_discrete
 import matplotlib.pyplot as plt
 import matplotlib.mlab as mlab
 import time
+import bisect
+from true import real_params
+from gaussian import Gauss
+from matplotlib.ticker import MultipleLocator, FormatStrFormatter
+from sklearn.utils.extmath import logsumexp
 
-class Gauss:
-    def __init__(self, m, c):
-        self.dim = m.size
-        self.mu = m
-        self.cov = c
 
-    def density(self, x):
-        return multivariate_normal.pdf(x, self.mu, self.cov)
+
 
 
 class GMM:
@@ -29,17 +28,17 @@ class GMM:
         exnum = gamma.sum(axis=1)
         self.w = exnum / tss
         for i in range(self.compnum):
-            self.gaussians[i].mu = np.dot(gamma[i], train_set) / exnum[i]
-            centre = train_set - self.gaussians[i].mu
+            self.gaussian[i].mu = np.dot(gamma[i], train_set) / exnum[i]
+            centre = train_set - self.gaussian[i].mu
 
-            self.gaussians[i].cov.fill(0)
+            self.gaussian[i].cov.fill(0)
             for n in range(tss):
-                self.gaussians[i].cov += gamma[i][n] * np.asmatrix(centre[n]).T * centre[n]
-            self.gaussians[i].cov /= exnum[i]
+                self.gaussian[i].cov += gamma[i][n] * np.asmatrix(centre[n]).T * centre[n]
+            self.gaussian[i].cov /= exnum[i]
 
     def updateProbabilities(self, norm, train_set):
         for i in range(self.compnum):
-            norm[i] = self.gaussians[i].density(train_set)
+            norm[i] = self.gaussian[i].density(train_set) + 1e-300
 
     def logLikelihood(self, train_set, norm):
         tss = train_set.shape[0]
@@ -52,93 +51,103 @@ class GMM:
         
     def __init__(self, w, mu, cov):
         self.dim = mu[0].size # dimension
-        self.compnum = w.size # the number of gaussians
-        self.w = w # weights of gaussians
-        self.gaussians = [Gauss(mu[i], cov[i]) for i in range(self.compnum)]
+        self.compnum = w.size # the number of gaussian
+        self.w = w # weights of gaussian
+        self.gaussian = [Gauss(mu[i], cov[i]) for i in range(self.compnum)]
 
     def printParam(self):
         print(self.w)
-        for g in self.gaussians:
+        for g in self.gaussian:
             print(g.mu)
             print(g.cov, '\n')
 
-    def EM(self, train_set, iter):
+    def EM(self, train_set):
         tss = train_set.shape[0]
         gamma = np.zeros((self.compnum, tss))
         norm = np.zeros((self.compnum, tss))
         self.updateProbabilities(norm, train_set)
         print(self.logLikelihood(train_set, norm))
 
-        for i in range(iter):
+        for i in range(25):
             self.Estep(train_set, norm, gamma)
             self.Mstep(train_set, gamma)
             self.updateProbabilities(norm, train_set)
             print(self.logLikelihood(train_set, norm))
 
 
+def closest(obs, point):
+    idx = (np.linalg.norm(obs - point, axis=1)).argmin()
+    return idx, obs[idx]
+
 def initParam(gnum, obs):
     dim = obs.shape[1]
-    w = np.random.random(gnum)
-    w /= w.sum()
+    w = np.full((gnum, ), 1 / gnum)
 
-    mu = np.random.multivariate_normal(obs.mean(axis=0), np.diag(obs.std(axis=0)), gnum)
     #mu = np.random.random_sample((gnum, dim)) * (np.amax(obs, axis=0) - np.amin(obs, axis=0)) + np.amin(obs, axis=0)
-    
+    mu = np.random.multivariate_normal(obs.mean(axis=0), np.diag(obs.std(axis=0) ** 2), gnum)
+    full = list(range(obs.shape[0]))
+    idxs = []
+    for i in range(gnum):
+        idx, mu[i] = closest(obs[list(set(full) - set(idxs)), :], mu[i])
+        for i in idxs:
+            if i <= idx:
+                idx += 1
+            else:
+                break
+        bisect.insort(idxs, idx)
+
     cov = np.full((gnum, dim, dim), np.eye(dim, dtype = float))
     return w, mu, cov
 
-def generateSamples(w, mu, cov, s):
-    dim = len(mu[0])
-    d = rv_discrete(values = (range(len(w)), w))
-    components = d.rvs(size=s)
-    # generate samples of size of each component, then shuffle
-    if dim > 1:
-        return components, np.array([np.random.multivariate_normal(mu[i], cov[i], 1)[0] for i in components])
-    else:
-        return components, np.asmatrix([np.random.normal(mu[i], cov[i], 1)[0] for i in components]).T
-
-def generate(true_w, true_mu, true_cov, n):
-    comps, obs = generateSamples(true_w, true_mu, true_cov, n)
-    np.savetxt("true", np.concatenate((np.asmatrix(comps).T, obs), axis=1), fmt=['%d'] + ['%f'] * obs.shape[1], delimiter='\t')
-    np.savetxt("input", obs, delimiter='\t', fmt='%f')
-    return obs
-
-def readSamples(file):
-    with open(file) as f:
-        obs = np.loadtxt(f)
-    return obs
+def draw(obs, model, j):
+    minorLocator = MultipleLocator(1)
+    plt.figure()
+    fig, ax = plt.subplots()
+    plt.plot(*zip(*obs), marker='o', ls='', zorder=1)
+    delta = 0.1
+    obsmax = np.amax(obs, axis=0)
+    obsmin = np.amin(obs, axis=0)
+    X, Y = np.mgrid[obsmin[0]:obsmax[0]:delta, obsmin[1]:obsmax[1]:delta] 
+    pos = np.empty(X.shape + (2,))
+    pos[:, :, 0] = X; pos[:, :, 1] = Y
+    for i, g in enumerate(model.gaussian):
+        rv = multivariate_normal(g.mu, g.cov)
+        plt.contour(X, Y, model.w[i] * rv.pdf(pos), zorder=2)
+        plt.scatter(g.mu[0], g.mu[1], color='r', s=20, zorder=2)
+    
+    ax.xaxis.set_minor_locator(minorLocator)
+    ax.yaxis.set_minor_locator(minorLocator)
+    plt.grid(which='both')
+    plt.savefig('em' + str(j) + '.png')
+    plt.close()
 
 
 def main():
-    gnum = 3
-    dim = 10
-    obs = readSamples("data/input8")
+    setnum = 12
 
-    #plt.plot(*zip(*obs), marker='o', ls='', zorder=1)
-        
+    comp = {1 : 2, 2 : 2, 3 : 3, 4 : 3, 5 : 4, 6: 3, 7: 3, 8 : 3, 9 : 3, 10: 3, 11: 3, 12: 3, 13: 5, 14: 3, 15: 5}
+    gnum = comp[setnum]
+    obs = np.loadtxt("data/input" + str(setnum))
+
     w, mu, cov = initParam(gnum, obs)
-    # w = np.array([0.33, 0.32, 0.35])
-    # mu = np.zeros((gnum, dim))
-    # mu[1] = np.full((1, dim), 5, dtype=float)
-    # mu[2] = np.full((1, dim), 10, dtype=float)
-    # cov = np.full((gnum, dim, dim), np.eye(dim))
 
     model = GMM(w, mu, cov)
-    model.EM(obs, 10)
-    model.printParam()
+    model.EM(obs)
+    #model.printParam()
+    #draw(obs, model, "fin")
 
-    # Here I assume that dimension is 2 #
-    # delta = 0.2
-    # obsmax = np.amax(obs, axis=0)
-    # obsmin = np.amin(obs, axis=0)
-    # x = np.arange(obsmin[0], obsmax[0], delta)
-    # y = np.arange(obsmin[1], obsmax[1], delta)
-    # X, Y = np.meshgrid(x, y)
-    # Z = 0
-    # for i, g in enumerate(model.gaussians):
-    #     Z = model.w[i] * mlab.bivariate_normal(X, Y, sigmax=g.cov[0][0], sigmay=g.cov[1][1], mux=g.mu[0], muy=g.mu[1], sigmaxy=g.cov[0][1])
-    #     plt.contour(X, Y, Z, zorder=2)
-            
-    # plt.savefig('em.png')
+    real_gauss = real_params(setnum)
+    means = []
+    covs = []
+
+    all_mu = np.array([g.mu for g in model.gaussian])
+    all_cov = np.array([g.cov for g in model.gaussian])
+    for i in range(gnum):
+        idx = (np.linalg.norm(all_mu - real_gauss.mu[i], axis=1)).argmin()
+        means.append(np.linalg.norm(all_mu[idx] - real_gauss.mu[i]))
+        covs.append(np.linalg.norm(np.diagonal(all_cov[idx]) - np.diagonal(real_gauss.cov[i])))
+
+    print(means)
+    print(covs)
 
 main()

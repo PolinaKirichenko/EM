@@ -9,6 +9,7 @@ import time
 from matplotlib.ticker import MultipleLocator, FormatStrFormatter
 from gaussian import Gauss
 from true import real_params
+import math
 
 class GMM:
     def Estep(self, train_set, norm, gamma):
@@ -16,8 +17,10 @@ class GMM:
         np.copyto(gamma, norm)
         gamma *= self.w[:, np.newaxis]
         gamma /= prob
+        np.savetxt("gamma", (gamma.reshape(gamma.shape[0], ), np.array(self.w)))
 
-    def Mstep(self, minibatch, gamma, inv, tss, lr, var):
+    def Mstep(self, minibatch, gamma, inv, lr):
+        print("MMM")
         bs = minibatch.shape[0]
         self.w += lr * gamma.sum(axis=1) / self.w
         self.w /= self.w.sum()
@@ -28,16 +31,17 @@ class GMM:
 
             for n in range(bs):
                 self.gaussian[i].cov += lr * gamma[i][n] / 2 * (-inv + np.dot(inv, np.dot(np.asmatrix(centre[n]).T * centre[n], inv)))
+        print("MMMMMM")
 
     def updateProbabilities(self, norm, train_set):
         for i in range(self.compnum):
-            norm[i] = self.gaussian[i].density(train_set)
+            norm[i] = self.gaussian[i].density(train_set) + 1e-250
+        np.savetxt("norm", norm)
 
     def logLikelihood(self, train_set, norm):
         tss = train_set.shape[0]
         ll = 0
         prob = np.dot(self.w, norm)
-        np.savetxt('stat', prob)
         for i in range(tss):
             ll += log(prob[i])
         return ll
@@ -57,18 +61,17 @@ class GMM:
 
     def stochEM(self, train_set, s, const):
         tss = train_set.shape[0]
-        var = train_set.std(axis = 0) ** 2
+        pics = (train_set.shape[1] == 2)
         gamma = np.zeros((self.compnum, s)) # for mini-batch
-        complete_gamma = np.zeros((self.compnum, tss))
 
         norm = np.zeros((self.compnum, s)) # for mini-batch
         complete_norm = np.zeros((self.compnum, tss))
-
-        self.updateProbabilities(complete_norm, train_set)
         inv = np.zeros((self.dim, self.dim))
 
-        ll = self.logLikelihood(train_set, complete_norm)
-        # freq = 100
+        # self.updateProbabilities(complete_norm, train_set)
+        # ll = self.logLikelihood(train_set, complete_norm)
+
+        freq = 200
 
         for i in range(50):
             batch_idx = np.random.randint(train_set.shape[0], size=s)
@@ -76,31 +79,32 @@ class GMM:
 
             self.updateProbabilities(norm, minibatch)
             self.Estep(minibatch, norm, gamma)
-            self.Mstep(minibatch, gamma, inv, tss, const, var)
+            self.Mstep(minibatch, gamma, inv, const)
             
-            self.updateProbabilities(complete_norm, train_set)
-            ll = self.logLikelihood(train_set, complete_norm)
-            print(ll)
-            #if i % freq == 0:
+            # self.updateProbabilities(complete_norm, train_set)
+            # ll = self.logLikelihood(train_set, complete_norm)
+            
+            #print(ll)
+            #if pics and i % freq == 0:
             #    draw(train_set, self, "a" + str(i))
 
-        #print("DECREASE LR")
-        #draw(train_set, self, "b")
-
-        for i in range(200):
+        for i in range(50, 2 * tss):
             batch_idx = np.random.randint(train_set.shape[0], size=s)
             minibatch = train_set[batch_idx, :]
 
             self.updateProbabilities(norm, minibatch)
             self.Estep(minibatch, norm, gamma)
-            self.Mstep(minibatch, gamma, inv, tss, const / (i + 1), var)
+            self.Mstep(minibatch, gamma, inv, const / math.sqrt(i + 1))
             
-            self.updateProbabilities(complete_norm, train_set)
-
-            ll = self.logLikelihood(train_set, complete_norm)
-            print(ll)
-            #if i % freq == 0:
+            # self.updateProbabilities(complete_norm, train_set)
+            #ll = self.logLikelihood(train_set, complete_norm)
+            
+            #print(ll)
+            #if pics and i % freq == 0:
             #    draw(train_set, self, "c" + str(i))
+
+        self.updateProbabilities(complete_norm, train_set)
+        ll = self.logLikelihood(train_set, complete_norm)
         return ll
 
 
@@ -151,21 +155,51 @@ def draw(obs, model, j):
     plt.close()
 
 
-def find_lr(obs, gnum):
+def find_lr():
+    comp = {1 : 2, 2 : 2, 3 : 3, 4 : 3, 5 : 4, 6: 3, 7: 3, 8 : 3, 9 : 3, 10: 3, 11: 3, 12: 3, 13: 5, 14: 3, 15: 5}
+    setnum = int(sys.argv[1])
+    gnum = comp[setnum]
+    obs = np.loadtxt("data/input" + str(setnum))
+    real_gauss = real_params(setnum)
+
     w, mu, cov = initParam(gnum, obs)
     model = GMM(w, mu, cov)
-    mean_ll = []
-    for const in np.arange(0.01, 0.11, 0.01):
+
+    f1 = open("report/const_sqrt/mean13_0.05", 'ab+')
+    f2 = open("report/const_sqrt/ll13_0.05", 'a+')
+
+    poss = [0.05]
+    for const in poss:
         values = []
-        for i in range(20):
+        mean_err = []
+        for i in range(9):
             print(i)
             w, mu, cov = initParam(gnum, obs)
-            model.w = w; model.mu = mu; model.cov = cov
-            logll = model.stochEM(obs, gnum, const)
-            values.append(logll)
-        mean_ll.append(sum(values) / len(values))
+            model.w = w
+            for i, g in enumerate(model.gaussian):
+                g.mu = mu[i]; g.cov = cov[i]
+            try:
+                logll = model.stochEM(obs, 1, const)
+                values.append(logll)
+            except Exception as e:
+                print(e)
+                f1.close()
+                f2.close()
+                exit(0)
+
+            all_mu = np.array([g.mu for g in model.gaussian])
+            for i in range(gnum):
+                idx = (np.linalg.norm(all_mu - real_gauss.mu[i], axis=1)).argmin()
+                mean_err.append(np.linalg.norm(all_mu[idx] - real_gauss.mu[i]))
+
+            np.savetxt(f1, np.array(mean_err[len(mean_err) - gnum:]))
+            f2.write(str(logll) + '\n')
+        # np.savetxt("report/const_sqrt/mean" + str(setnum) + "_" + str(const), np.array(mean_err))
+        # np.savetxt("report/const_sqrt/ll" + str(setnum) + "_" + str(const), np.array(values))
         print(const)
-    return (np.argmax(np.array(mean_ll)) + 1) * 0.01
+    f1.close()
+    f2.close()
+
 
 
 def test_accuracy(const, fnum, out, gnum):
@@ -176,9 +210,9 @@ def test_accuracy(const, fnum, out, gnum):
     covs = []
     w, mu, cov = initParam(gnum, obs)
     model = GMM(w, mu, cov)
-    for i in range(20):
-        print(i)
-        model.w = w; 
+    for j in range(10):
+        print(j)
+        model.w = w
         for i, g in enumerate(model.gaussian):
             g.mu = mu[i]; g.cov = cov[i]
         model.stochEM(obs, gnum, const)
@@ -193,34 +227,62 @@ def test_accuracy(const, fnum, out, gnum):
     out.write("mu " + str(sum(means) / len(means)) + '\n' + "cov " + str(sum(covs) / len(covs)) + '\n\n')
 
 
-def cross_valid():
-    comp = {1 : 2, 2 : 2, 3 : 3, 4 : 3, 5 : 4, 6: 3, 7: 3}
+def report():
     setnum = int(sys.argv[1])
-
+    comp = {1 : 2, 2 : 2, 3 : 3, 4 : 3, 5 : 4, 6: 3, 7: 3, 8 : 3, 9 : 3, 10: 3, 11: 3, 12: 3, 13: 5, 14: 3, 15: 5}
+    gnum = comp[setnum]
     obs = np.loadtxt("data/input" + str(setnum))
+    out = open("report/stoch/report.txt", 'a+')
 
-    lr_const = find_lr(obs, comp[setnum])
-    f = open("outcome" + str(setnum), 'w+')
-    f.write("LR found for dataset " + str(setnum) + " is " + str(lr_const) + '\n\n')
-    for i in range(1, 6):
-        if i == setnum:
-            continue
-        test_accuracy(lr_const, i, f, comp[i])
-    f.close()
+    lr_const = 0.03
+
+    real_gauss = real_params(setnum)
+    means = []
+    covs = []
+    w, mu, cov = initParam(gnum, obs)
+    model = GMM(w, mu, cov)
+
+    for j in range(20):
+        print(j)
+        w, mu, cov = initParam(gnum, obs)
+        model.w = w
+        for i, g in enumerate(model.gaussian):
+            g.mu = mu[i]; g.cov = cov[i]
+        model.stochEM(obs, 1, lr_const)
+        all_mu = np.array([g.mu for g in model.gaussian])
+        all_cov = np.array([g.cov for g in model.gaussian])
+        for i in range(gnum):
+            idx = (np.linalg.norm(all_mu - real_gauss.mu[i], axis=1)).argmin()
+            means.append(np.linalg.norm(all_mu[idx] - real_gauss.mu[i]))
+            covs.append(np.linalg.norm(np.diagonal(all_cov[idx]) - np.diagonal(real_gauss.cov[i])))
+
+    np.savetxt("report/stoch/res" + str(setnum), (np.array(means), np.array(covs)))
+    out.write("Testing set " + str(setnum) + '\n')
+    out.write("mu " + str(sum(means) / len(means)) + '\n' + "cov " + str(sum(covs) / len(covs)) + '\n\n')
+
 
 def em_train():
-    gnum = 4
-    obs = np.loadtxt("data/input6")
+    setnum = int(sys.argv[1])
+    comp = {1 : 2, 2 : 2, 3 : 3, 4 : 3, 5 : 4, 6: 3, 7: 3, 8 : 3, 9 : 3, 10: 3, 11: 3, 12: 3, 13: 5, 14: 3, 15: 5}
+    gnum = comp[setnum]
+    obs = np.loadtxt("data/input" + str(setnum))
 
+    real_gauss = real_params(setnum)
+    means = []
+    covs = []
+    
     w, mu, cov = initParam(gnum, obs)
-
     model = GMM(w, mu, cov)
-    model.printParam()
-    draw(obs, model, 0)
+    model.stochEM(obs, 1, 0.05)
 
-    model.stochEM(obs, 1)
-    model.printParam()
+    all_mu = np.array([g.mu for g in model.gaussian])
+    all_cov = np.array([g.cov for g in model.gaussian])
+    for i in range(gnum):
+        idx = (np.linalg.norm(all_mu - real_gauss.mu[i], axis=1)).argmin()
+        means.append(np.linalg.norm(all_mu[idx] - real_gauss.mu[i]))
+        covs.append(np.linalg.norm(np.diagonal(all_cov[idx]) - np.diagonal(real_gauss.cov[i])))
 
-    draw(obs, model, "fin")
+    print(means)
+    print(covs)
 
-cross_valid()
+find_lr()
