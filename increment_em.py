@@ -9,100 +9,108 @@ from true import real_params
 import math
 import bisect
 import sys
+from sklearn.utils.extmath import logsumexp
+import scipy
 
-class Gauss:
-    def __init__(self, m, c):
-        self.dim = m.size
-        self.mu = m
-        self.cov = c
 
-    def density(self, x):
-        return multivariate_normal.pdf(x, self.mu, self.cov)
+def positive_def(a):
+    eps = 0.001
+    w, v = np.linalg.eigh(a)
+    jordan = np.dot(np.transpose(v), a.dot(v))
+    di = np.diag_indices(jordan.shape[0])
+    jordan = np.diag(jordan[di].clip(eps))
+    return v.dot(jordan).dot(np.transpose(v))
+
+
+def _log_multivariate_normal_density_full(X, means, covars, min_covar=1):
+    """Log probability for full covariance matrices."""
+    # n_samples = 1 #
+    n_samples, n_dim = X.shape
+    nmix = len(means)
+    log_prob = np.empty((n_samples, nmix))
+    for c, (mu, cv) in enumerate(zip(means, covars)):
+        try:
+            cv_chol = scipy.linalg.cholesky(cv, lower=True)
+        except scipy.linalg.LinAlgError:
+            # The model is most probably stuck in a component with too
+            # few observations, we need to reinitialize this components
+            try:
+                #cv_chol = scipy.linalg.cholesky(cv + min_covar * np.eye(n_dim),
+                #                          lower=True)
+                cv_chol = scipy.linalg.cholesky(positive_def(cv), lower=True)
+            except scipy.linalg.LinAlgError:
+                np.savetxt("errorch", cv + min_covar * np.eye(n_dim))
+                raise ValueError("'covars' must be symmetric, "
+                                 "positive-definite")
+
+        cv_log_det = 2 * np.sum(np.log(np.diagonal(cv_chol)))
+        cv_sol = scipy.linalg.solve_triangular(cv_chol, (X - mu).T, lower=True).T
+        log_prob[:, c] = - .5 * (np.sum(cv_sol ** 2, axis=1) +
+                                 n_dim * np.log(2 * np.pi) + cv_log_det)
+
+    return log_prob
 
 
 class GMM:
-    def Estep(self, train_set, norm, gamma_new):
-        prob = np.dot(self.w, norm) # prob[j] probability of observation j
-        np.copyto(gamma_new, norm)
-        gamma_new *= self.w[:, np.newaxis]
-        gamma_new /= prob
+    def Estep(self, train_set):
+        lpr = (_log_multivariate_normal_density_full(train_set, self.means, self.covs,) + np.log(self.w))
+        logprob = logsumexp(lpr, axis=1)
+        responsibilities = np.exp(lpr - logprob[:, np.newaxis])
+        return logprob, responsibilities.T
 
     def Mstep(self, minibatch, gamma_diff, exnum_old, temp, tss):
         bs = minibatch.shape[0]
         exnum = exnum_old + gamma_diff.sum(axis=1)
         self.w = exnum / tss
         for i in range(self.compnum):
-            mu_old = self.gaussian[i].mu
-            self.gaussian[i].mu += np.dot(gamma_diff[i], minibatch - self.gaussian[i].mu) / exnum[i]
-            centre = minibatch - self.gaussian[i].mu
-
+            mu_old = np.copy(self.means[i])
+            self.means[i] += np.dot(gamma_diff[i], minibatch - self.means[i]) / exnum[i]
+            
+            centre = minibatch - self.means[i]
             temp.fill(0)
             for n in range(bs):
-                temp += gamma_diff[i][n] * (np.asmatrix(centre[n]).T * centre[n] - self.gaussian[i].cov)
-            temp += exnum_old[i] * (np.asmatrix(self.gaussian[i].mu - mu_old)).T * (self.gaussian[i].mu - mu_old)
-            temp /= exnum_old[i]
-            self.gaussian[i].cov += temp
+               temp += gamma_diff[i][n] * (np.asmatrix(centre[n]).T * centre[n] - self.covs[i])
+            temp += exnum_old[i] * (np.asmatrix(self.means[i] - mu_old)).T * (self.means[i] - mu_old)
+            temp /= exnum[i]
+            self.covs[i] += temp
+        return exnum
 
 
-    def updateProbabilities(self, norm, train_set):
-        for i in range(self.compnum):
-            norm[i] = self.gaussian[i].density(train_set) + 1e-320
-
-    def logLikelihood(self, train_set, norm):
-        tss = train_set.shape[0]
-        ll = 0
-        prob = np.dot(self.w, norm)
-        for i in range(tss):
-            ll += log(prob[i])
-        return ll
-
-    def initialExnum(self, complete_norm):
-        gamma = np.empty([complete_norm.shape[0], complete_norm.shape[1]])
-        prob = np.dot(self.w, complete_norm)
-        np.copyto(gamma, complete_norm)
-        gamma *= self.w[:, np.newaxis]
-        gamma /= prob
-        return gamma.sum(axis=1)
-
-        
     def __init__(self, w, mu, cov):
         self.dim = mu[0].size # dimension
         self.compnum = w.size # the number of gaussian
         self.w = w # weights of gaussian
-        self.gaussian = [Gauss(mu[i], cov[i]) for i in range(self.compnum)]
+        self.means = mu
+        self.covs = cov
 
     def printParam(self):
         print(self.w)
-        for g in self.gaussian:
-            print(g.mu)
-            print(g.cov, '\n')
+        for i in range(self.compnum):
+            print(self.means[i])
+            print(self.covs[i], '\n')
 
-    def stochEM(self, train_set, s):
+    def stochEM(self, train_set):
+        s = 1
         tss = train_set.shape[0]
         gamma_new = np.zeros((self.compnum, s)) # for mini-batch
-        complete_gamma = np.zeros((self.compnum, tss))
-
-        norm = np.zeros((self.compnum, s)) # for mini-batch
-        # complete_norm = np.zeros((self.compnum, tss))
-
-        self.updateProbabilities(complete_norm, train_set)
-        exnum = self.initialExnum(complete_norm)
+        complete_gamma = np.full((self.compnum, tss), 1 / self.compnum)
+        exnum = complete_gamma.sum(axis=1)
+        
         temp = np.zeros((self.dim, self.dim))
 
-        # ll = self.logLikelihood(train_set, complete_norm)
         for i in range(tss):
             batch_idx = np.random.randint(train_set.shape[0], size=s)
             minibatch = train_set[batch_idx, :]
-            self.updateProbabilities(norm, minibatch)
-            self.Estep(minibatch, norm, gamma_new)
-            self.Mstep(minibatch, gamma_new - complete_gamma[:, batch_idx], exnum, temp, tss)
+            logls, gamma_new = self.Estep(minibatch)
+            exnum = self.Mstep(minibatch, gamma_new - complete_gamma[:, batch_idx], exnum, temp, tss)
+            complete_gamma[:, batch_idx] = gamma_new
 
-            # self.updateProbabilities(complete_norm, train_set)
-            # ll = self.logLikelihood(train_set, complete_norm)
+            ll, _ = self.Estep(train_set)
+            print(ll.sum())
 
-            #print(ll)
-            #if i % 200 == 0:
-            #    draw(train_set, self, i)
+            if i % 50 == 0:
+                draw(train_set, self, i)
+
 
 
 def closest(obs, point):
@@ -131,7 +139,6 @@ def initParam(gnum, obs):
 
 
 def draw(obs, model, j):
-# Here I assume that dimension is 2 #
     minorLocator = MultipleLocator(1)
     plt.figure()
     fig, ax = plt.subplots()
@@ -142,15 +149,15 @@ def draw(obs, model, j):
     X, Y = np.mgrid[obsmin[0]:obsmax[0]:delta, obsmin[1]:obsmax[1]:delta] 
     pos = np.empty(X.shape + (2,))
     pos[:, :, 0] = X; pos[:, :, 1] = Y
-    for i, g in enumerate(model.gaussian):
-        rv = multivariate_normal(g.mu, g.cov)
+    for i in range(len(model.means)):
+        rv = multivariate_normal(model.means[i], model.covs[i])
         plt.contour(X, Y, model.w[i] * rv.pdf(pos), zorder=2)
-        plt.scatter(g.mu[0], g.mu[1], color='r', s=20, zorder=2)
+        plt.scatter(model.means[i][0], model.means[i][1], color='r', s=20, zorder=2)
     
     ax.xaxis.set_minor_locator(minorLocator)
     ax.yaxis.set_minor_locator(minorLocator)
     plt.grid(which='both')
-    plt.savefig('increment/stoch' + str(j) + '.png')
+    plt.savefig('increment/inc' + str(j) + '.png')
     plt.close()
 
 
@@ -159,36 +166,33 @@ def test():
     setnum = int(sys.argv[1])
     gnum = comp[setnum]
     obs = np.loadtxt("data/" + "input" + str(setnum))
-    out = open("incr_tot", 'a+')
 
     real_gauss = real_params(setnum)
-    means = []
-    covs = []
     w, mu, cov = initParam(gnum, obs)
     model = GMM(w, mu, cov)
-    for j in range(15):
-        print(j)
+    values = []
+    mean_err = []
+    for i in range(30):
+        print(i)
         w, mu, cov = initParam(gnum, obs)
         model.w = w
-        for i, g in enumerate(model.gaussian):
-            g.mu = mu[i]; g.cov = cov[i]
-        model.stochEM(obs, 1)
-        all_mu = np.array([g.mu for g in model.gaussian])
-        all_cov = np.array([g.cov for g in model.gaussian])
         for i in range(gnum):
-            idx = (np.linalg.norm(all_mu - real_gauss.mu[i], axis=1)).argmin()
-            means.append(np.linalg.norm(all_mu[idx] - real_gauss.mu[i]))
-            covs.append(np.linalg.norm(np.diagonal(all_cov[idx]) - np.diagonal(real_gauss.cov[i])))
+            model.means[i] = mu[i]; model.covs[i] = cov[i]
 
-    np.savetxt("incr" + str(setnum), (np.array(means), np.array(covs)))
-    out.write("Testing set " + str(setnum) + '\n')
-    out.write("mu " + str(sum(means) / len(means)) + '\n' + "cov " + str(sum(covs) / len(covs)) + '\n\n')
-    out.close()
+        logll = model.stochEM(obs)
+        values.append(logll)
+
+        for i in range(gnum):
+            idx = (np.linalg.norm(model.means - real_gauss.mu[i], axis=1)).argmin()
+            mean_err.append(np.linalg.norm(model.means[idx] - real_gauss.mu[i]))
+
+    np.savetxt("report/inc/mean" + str(setnum), np.array(mean_err))
+    np.savetxt("report/inc/ll" + str(setnum), np.array(values))
 
 
 def main():
     # mini-batch size = 1
-    setnum = 8
+    setnum = int(sys.argv[1])
     comp = {1 : 2, 2 : 2, 3 : 3, 4 : 3, 5 : 4, 6: 3, 7: 3, 8 : 3, 9 : 3, 10: 3, 11: 3, 12: 3, 13: 5, 14: 3, 15: 5}
     gnum = comp[setnum]
     obs = np.loadtxt("data/input" + str(setnum))
@@ -196,26 +200,22 @@ def main():
     w, mu, cov = initParam(gnum, obs)
 
     model = GMM(w, mu, cov)
+    model.stochEM(obs)
     model.printParam()
-    if pics:
-        draw(obs, model, 0)
-    model.stochEM(obs, 1)
-    model.printParam()
-    if pics:
-        draw(obs, model, "fin")
 
     real_gauss = real_params(setnum)
     means = []
     covs = []
 
-    all_mu = np.array([g.mu for g in model.gaussian])
-    all_cov = np.array([g.cov for g in model.gaussian])
     for i in range(gnum):
-        idx = (np.linalg.norm(all_mu - real_gauss.mu[i], axis=1)).argmin()
-        means.append(np.linalg.norm(all_mu[idx] - real_gauss.mu[i]))
-        covs.append(np.linalg.norm(np.diagonal(all_cov[idx]) - np.diagonal(real_gauss.cov[i])))
+        idx = (np.linalg.norm(model.means - real_gauss.mu[i], axis=1)).argmin()
+        means.append(np.linalg.norm(model.means[idx] - real_gauss.mu[i]))
+        covs.append(np.linalg.norm(np.diagonal(model.covs[idx]) - np.diagonal(real_gauss.cov[i])))
 
     print(means)
     print(covs)
 
-test()
+    if pics:
+        draw(obs, model, "fin")
+
+main()
