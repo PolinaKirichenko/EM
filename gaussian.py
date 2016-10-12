@@ -2,7 +2,7 @@ import numpy as np
 from scipy.stats import multivariate_normal
 
 def positive_def(a, i):
-    eps = 0.01 * i
+    eps = 0.01
     w, v = np.linalg.eigh(a)
     jordan = np.dot(np.transpose(v), a.dot(v))
     di = np.diag_indices(jordan.shape[0])
