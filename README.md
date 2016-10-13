@@ -14,6 +14,16 @@ The parameter estimation formulae for GMM have the form of the sum over the data
 
 ####The results of experiments on model data
 
-<to be added>
+The comparison of the algorithms' performance on model data sets (dimensions 2, 3, 5, 10, 15, and 30 with 2-5 components in the mixture and 5000-100000 number of observations, running each experiment 20-30 times and taking the average for the results stability):
+<p align="center"><img src="report/em.png" width="500"></p>
 
-For more details, see the project [report](paper.pdf).
+"stoch sqrt" stands for SGD EM with learning rate c/sqrt(t).
+
+SGD EM with the learning rate (assuming a proper constant is chosen) performs relatively well comparing to Adedelta. Incremental EM noticeably outperforms stochastic gradient EM but this approach is not applicable to all the family of distributions.
+
+It is also interesting to compare SGD EM and incremental EM speed of convergence with that of classic EM. It is noteworthy that in many cases after just one epoch both iEM and SGD EM converged to values at least as good as classic EM after two
+passages through dataset. It is notable that quality of SGD EM and incremental EM are fairly close throughout the learning, although incremental EM convergence occurs significantly faster.
+
+<p align="center"> <img src="report/compare1.png" width="400"> <img src="report/compare2.png" width="400"> </p>
+
+For more details, see the project [report](report/paper.pdf).
