@@ -12,7 +12,7 @@ In stochastic gradient EM after usual E-step, we make a step along the gradient 
 
 The parameter estimation formulae for GMM have the form of the sum over the data samples, so another non-gradient approach would be to  update the summands correspondent to a randomly chosen mini-batch which is the idea in incremental EM.
 
-####The results of experiments on model data
+#### The results of experiments on model data
 
 The comparison of the algorithms' performance on model data sets (dimensions 2, 3, 5, 10, 15, and 30 with 2-5 components in the mixture and 5000-100000 number of observations, running each experiment 20-30 times and taking the average for the results stability):
 <p align="center"><img src="report/em.png" width="500"></p>
