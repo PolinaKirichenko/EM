@@ -26,4 +26,4 @@ passages through dataset. It is notable that quality of SGD EM and incremental E
 
 <p align="center"> <img src="report/compare1.png" width="400"> <img src="report/compare2.png" width="400"> </p>
 
-For more details, see the project [report](report/paper.pdf).
+For more details, see the project [report](report/EM-project-report.pdf).
